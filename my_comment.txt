@@ -1,0 +1,102 @@
+Здесь опишу проблему, с которой столкнулась после запуска приложения, а также мое решение данной проблемы.
+
+Итак, приложение (как клиентская, так и серверая части) успешно было запущено.
+Но попытки общения клиента с сервером были тщетны.
+Браузер Opera (вкладка Network инструментов разработчика) показал, что проблема в том, что приходящий
+от сервера куки не может быть установлен браузером. Что этому мешало? А вот этот кусок кода:
+
+ctx.cookies.set(COOKIES.ACCESS_TOKEN, accessToken, {
+  httpOnly: true,
+  domain: parsedUrl.hostname,
+  expires: new Date(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000), // 10 years
+  secure: false,
+  sameSite: 'none',
+});
+
+А конкретнее, Opera ругалась на "domain: parsedUrl.hostname".
+
+В настоящее время браузеры реализуют поддержку новой модели классификации файлов cookie и используют
+настройку "SameSite=None; Secure" для межсайтовых файлов cookie.
+
+Таким образом, запрос на http://localhost:3001 с http://localhost:3002 не проходил.
+
+Что сделала:
+
+1) сгенерировала файлы key.pem, cert.pem, rootCA.pem (последний установила в качестве
+   сертификата корневого удостоверяющего центра сертификации)
+
+2)
+  Серверная часть:
+  const sslOptions = {
+    key: fs.readFileSync('ssl/key.pem', 'utf8').toString(),
+    cert: fs.readFileSync('ssl/cert.pem', 'utf8').toString(),
+    rejectUnauthorized: false,
+    ca: fs.readFileSync('ssl/rootCA.pem', 'utf8').toString(),
+  };  
+  const httpsServer = https.createServer(sslOptions, app.callback());
+
+  вместо
+
+  server = http.createServer...
+
+3)
+  Тоже серверная часть:
+  ctx.cookies.set(COOKIES.ACCESS_TOKEN, accessToken, {
+    httpOnly: true,
+    expires: new Date(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000), // 10 years
+    secure: true,
+    sameSite: 'none',
+  });
+
+4)
+  Для запуска next-приложения на localhost по https хотелось применить экспериментальный флаг --experimental-https.
+  Поэтому пришлось поднять версию next с 13 до 14:
+  pnpm up next react react-dom eslint-config-next --latest
+
+  После чего в package.json web-проекта вместо
+  "dev": "next dev -p 3002"
+  можно было написать
+  "dev": "next dev -p 3002 --experimental-https --experimental-https-key ./ssl/key.pem --experimental-https-cert ./ssl/cert.pem"
+
+5)
+  Ну и, конечно, пришлось внести изменения в .env.development:
+  NEXT_PUBLIC_API_URL=https://127.0.0.1:3001
+  NEXT_PUBLIC_WS_URL=https://127.0.0.1:3001
+  NEXT_PUBLIC_WEB_URL=https://127.0.0.1:3002 
+
+Теперь все запускается и работает, только клиентская часть при запуске (только в этот момент) выдает ошибку:
+TypeError: fetch failed
+    at node:internal/deps/undici/undici:12344:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async getVersionInfo (C:\Work\ПО_test\shopy\js-vacancy-test-task\node_modules\.pnpm\next@14.2.4_@babel+core@7.21.0_react-dom@18.3.1_react@18.3.1__react@18.3.1\node_modules\next\dist\server\dev\hot-reloader-webpack.js:215:21)
+    at async Span.traceAsyncFn (C:\Work\ПО_test\shopy\js-vacancy-test-task\node_modules\.pnpm\next@14.2.4_@babel+core@7.21.0_react-dom@18.3.1_react@18.3.1__react@18.3.1\node_modules\next\dist\trace\trace.js:154:20)
+    at async HotReloaderWebpack.start (C:\Work\ПО_test\shopy\js-vacancy-test-task\node_modules\.pnpm\next@14.2.4_@babel+core@7.21.0_react-dom@18.3.1_react@18.3.1__react@18.3.1\node_modules\next\dist\server\dev\hot-reloader-webpack.js:607:28)
+    at async startWatcher (C:\Work\ПО_test\shopy\js-vacancy-test-task\node_modules\.pnpm\next@14.2.4_@babel+core@7.21.0_react-dom@18.3.1_react@18.3.1__react@18.3.1\node_modules\next\dist\server\lib\router-utils\setup-dev-bundler.js:156:5)
+    at async setupDevBundler (C:\Work\ПО_test\shopy\js-vacancy-test-task\node_modules\.pnpm\next@14.2.4_@babel+core@7.21.0_react-dom@18.3.1_react@18.3.1__react@18.3.1\node_modules\next\dist\server\lib\router-utils\setup-dev-bundler.js:775:20)
+    at async Span.traceAsyncFn (C:\Work\ПО_test\shopy\js-vacancy-test-task\node_modules\.pnpm\next@14.2.4_@babel+core@7.21.0_react-dom@18.3.1_react@18.3.1__react@18.3.1\node_modules\next\dist\trace\trace.js:154:20)
+    at async initialize (C:\Work\ПО_test\shopy\js-vacancy-test-task\node_modules\.pnpm\next@14.2.4_@babel+core@7.21.0_react-dom@18.3.1_react@18.3.1__react@18.3.1\node_modules\next\dist\server\lib\router-server.js:78:30)
+    at async Server.<anonymous> (C:\Work\ПО_test\shopy\js-vacancy-test-task\node_modules\.pnpm\next@14.2.4_@babel+core@7.21.0_react-dom@18.3.1_react@18.3.1__react@18.3.1\node_modules\next\dist\server\lib\start-server.js:249:36) {
+  cause: ConnectTimeoutError: Connect Timeout Error
+      at onConnectTimeout (node:internal/deps/undici/undici:7492:28)
+      at node:internal/deps/undici/undici:7448:50
+      at Immediate._onImmediate (node:internal/deps/undici/undici:7478:37)
+      at process.processImmediate (node:internal/timers:478:21) {
+    code: 'UND_ERR_CONNECT_TIMEOUT'
+  }
+}
+
+По коду ошибки пришла к сайту (https://undici.nodejs.org/#/), где описывается ее причина:
+
+Дело в библиотеке undici (An HTTP/1.1 client, written from scratch for Node.js)
+
+А вот и причина ошибки:
+If you experience problem when connecting to a remote server that is resolved by your DNS servers to a IPv6 (AAAA record)
+first, there are chances that your local router or ISP might have problem connecting to IPv6 networks.
+In that case undici will throw an error with code UND_ERR_CONNECT_TIMEOUT.
+
+If the target server resolves to both a IPv6 and IPv4 (A records) address and you are using a compatible Node version
+(18.3.0 and above), you can fix the problem by providing the autoSelectFamily option (support by both undici.request
+and undici.Agent) which will enable the family autoselection algorithm when establishing the connection.
+
+Решила я вначале поставить данную библиотеку. Установила. Ошибка не пропала, конечно.
+Но потом я решила, что ошибка не критична, удалила библиотеку, и, как ни странно, после этого ошибка больше не появлялась.

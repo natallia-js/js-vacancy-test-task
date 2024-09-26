@@ -1,0 +1,22 @@
+.stack {
+    border: 1px solid;
+    border-radius: 12px;
+}
+
+.filters_title_block {
+    text-align: left;
+    font-size: 20px;
+    font-weight: 700;
+}
+
+.reset_all_block {
+    text-align: right;
+}
+
+.reset_all_btn {
+    border: none;
+}
+
+.price_title {
+    text-align: left;
+}
